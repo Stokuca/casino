@@ -1,20 +1,25 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 
-@Controller('auth')
+@Controller()
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly auth: AuthService) {}
 
-  @Post('register')
-  async register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto.email, dto.password);
+  @Post('auth/register')
+  register(@Body() dto: RegisterDto) {
+    // vraća player-a (možeš kasnije da vratiš i token ako želiš)
+    return this.auth.register(dto.email, dto.password);
   }
 
-  @Post('login')
-  async login(@Body() dto: LoginDto) {
-    // ovde će ići login logika (JWT generacija)
-    return { message: 'login placeholder' };
+  @Post('auth/login')
+  playerLogin(@Body() dto: LoginDto) {
+    return this.auth.playerLogin(dto.email, dto.password);
+  }
+
+  @Post('operator/login')
+  operatorLogin(@Body() dto: LoginDto) {
+    return this.auth.operatorLogin(dto.email, dto.password);
   }
 }
