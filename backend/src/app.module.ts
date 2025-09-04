@@ -6,7 +6,7 @@ import { PlayersModule } from './modules/players/players.module';
 import { WalletModule } from './modules/wallet/wallet.module';
 import { BetsModule } from './modules/bets/bets.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
-import { OperatorsModule } from './modules/operators/dto/operators.module';
+import { OperatorsModule } from './modules/operators/operators.module';
 
 @Module({
   imports: [
