@@ -17,14 +17,20 @@ export class OperatorsPlayersService {
   ) {}
 
   async leaderboard(dto: LeaderboardDto) {
-    const qb = this.txRepo.createQueryBuilder('t')
-      .select('t.playerId', 'playerId')
-      .addSelect(`SUM(CASE WHEN t.type = 'BET' THEN t.amountCents ELSE 0 END)`, 'betCents')
-      .addSelect(`SUM(CASE WHEN t.type = 'PAYOUT' THEN t.amountCents ELSE 0 END)`, 'payoutCents')
-      .addSelect(`SUM(CASE WHEN t.type = 'BET' THEN t.amountCents ELSE 0 END) - SUM(CASE WHEN t.type = 'PAYOUT' THEN t.amountCents ELSE 0 END)`, 'ggrCents')
-      .groupBy('t.playerId')
-      .orderBy('"ggrCents"', 'DESC')
-      .limit(dto.limit);
+    const limit = Math.min(dto.limit ?? 10, 100); // hard cap
+  const qb = this.txRepo.createQueryBuilder('t')
+    .select('t.playerId', 'playerId')
+    .addSelect(`SUM(CASE WHEN t.type = 'BET' THEN t.amountCents ELSE 0 END)`, 'betCents')
+    .addSelect(`SUM(CASE WHEN t.type = 'PAYOUT' THEN t.amountCents ELSE 0 END)`, 'payoutCents')
+    .addSelect(
+      `SUM(CASE WHEN t.type = 'BET' THEN t.amountCents ELSE 0 END)
+       - SUM(CASE WHEN t.type = 'PAYOUT' THEN t.amountCents ELSE 0 END)`,
+      'ggrCents',
+    )
+    .groupBy('t.playerId')
+    .orderBy('"ggrCents"', 'DESC')     // << bitno: quoted alias
+    .addOrderBy('t.playerId', 'ASC')   // stabilan tie-break
+    .limit(limit);
 
     const rows = await qb.getRawMany<{ playerId: string; betCents: string; payoutCents: string; ggrCents: string }>();
 
@@ -46,9 +52,12 @@ export class OperatorsPlayersService {
   }
 
   async listPlayers(dto: QueryPlayersDto) {
-    const { page, limit, sort, order } = dto;
+    // clamp i defaulti
+    const page  = Math.max(1, Number(dto.page ?? 1));
+    const limit = Math.min(Math.max(1, Number(dto.limit ?? 10)), 100);
     const offset = (page - 1) * limit;
-
+  
+    // agregati po playeru
     const base = this.txRepo.createQueryBuilder('t')
       .select('t.playerId', 'playerId')
       .addSelect(`COUNT(*) FILTER (WHERE t.type = 'BET')`, 'betsCount')
@@ -56,19 +65,23 @@ export class OperatorsPlayersService {
       .addSelect(`SUM(CASE WHEN t.type = 'PAYOUT' THEN t.amountCents ELSE 0 END)`, 'payoutCents')
       .addSelect(`MAX(t.createdAt)`, 'lastActiveAt')
       .groupBy('t.playerId');
-
+  
     const wrap = this.txRepo.createQueryBuilder()
       .select('*')
       .from('(' + base.getQuery() + ')', 'agg')
       .setParameters(base.getParameters());
-
+  
+    // normalizuj sort/order
+    const sortKey = String(dto.sort ?? 'revenue').toLowerCase();
+    const orderDir = String(dto.order ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
+  
     const sortCol =
-      sort === 'revenue' ? `"betCents" - "payoutCents"` :
-      sort === 'bets'    ? `"betsCount"` :
-                           `"lastActiveAt"`;
-
+      sortKey === 'revenue' ? `"betCents" - "payoutCents"` :
+      sortKey === 'bets'    ? `"betsCount"` :
+                              `"lastActiveAt"`;
+  
     const rows = await wrap
-      .orderBy(sortCol, order.toUpperCase() as ('ASC' | 'DESC'))
+      .orderBy(sortCol, orderDir)
       .offset(offset)
       .limit(limit)
       .getRawMany<{
@@ -78,11 +91,15 @@ export class OperatorsPlayersService {
         payoutCents: string;
         lastActiveAt: string;
       }>();
-
-    const total = await this.txRepo.createQueryBuilder('t')
+  
+    const totalRow = await this.txRepo.createQueryBuilder('t')
       .select('COUNT(DISTINCT t.playerId)', 'cnt')
       .getRawOne<{ cnt: string }>();
-
+  
+    const total = Number(totalRow?.cnt || 0);
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const hasNext = page < totalPages;
+  
     const ids = rows.map(r => r.playerId);
     const players = ids.length
       ? await this.playerRepo.createQueryBuilder('p')
@@ -90,7 +107,7 @@ export class OperatorsPlayersService {
           .where('p.id IN (:...ids)', { ids })
           .getMany()
       : [];
-
+  
     const map = new Map(players.map(p => [p.id, p]));
     const items = rows.map(r => ({
       player: map.get(r.playerId) || { id: r.playerId },
@@ -100,14 +117,10 @@ export class OperatorsPlayersService {
       revenueCents: Number(r.betCents || 0) - Number(r.payoutCents || 0),
       lastActiveAt: r.lastActiveAt ? new Date(r.lastActiveAt) : null,
     }));
-
-    return {
-      page,
-      limit,
-      total: Number(total?.cnt || 0),
-      items,
-    };
+  
+    return { page, limit, total, totalPages, hasNext, items };
   }
+  
 
   async activePlayers(dto: ActivePlayersDto) {
     const since = new Date();
