@@ -1,6 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
+// ⬇️ NEW
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
+
 import { AuthModule } from './modules/auth/auth.module';
 import { PlayersModule } from './modules/players/players.module';
 import { WalletModule } from './modules/wallet/wallet.module';
@@ -24,12 +29,20 @@ import { OperatorsModule } from './modules/operators/operators.module';
         migrationsRun: true,
       }),
     }),
+
+    // ⬇️ NEW: 100 zahteva / 60 sekundi po IP (po potrebi promeni)
+    ThrottlerModule.forRoot([{ ttl: 60, limit: 100 }]),
+
     AuthModule,
     PlayersModule,
     WalletModule,
     BetsModule,
     TransactionsModule,
-    OperatorsModule
+    OperatorsModule,
+  ],
+  providers: [
+    // ⬇️ NEW: globalni guard za rate limiting
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

@@ -1,12 +1,27 @@
 import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+
+// ✅ Swagger
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
-import { AppModule } from './app.module';
+// ✅ Helmet
+import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // ✅ Security middleware
+  app.use(helmet());
+
+  // ✅ CORS (dodaj origin tvog frontenda ako već znaš)
+  app.enableCors({
+    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    credentials: true,
+    methods: ['GET','POST','PUT','DELETE','PATCH','OPTIONS'],
+  });
+
+  // ✅ Globalna validacija DTO-a
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -15,10 +30,8 @@ async function bootstrap() {
     }),
   );
 
-  app.enableCors();
-
-  // ✅ Swagger setup: named bearer + persist auth
-  const config = new DocumentBuilder()
+  // ✅ Swagger setup: http://localhost:3000/docs
+  const swaggerCfg = new DocumentBuilder()
     .setTitle('Casino Platform API')
     .setDescription('API dokumentacija za player i operator deo')
     .setVersion('1.0')
@@ -28,8 +41,8 @@ async function bootstrap() {
     )
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document, {
+  const swaggerDoc = SwaggerModule.createDocument(app, swaggerCfg);
+  SwaggerModule.setup('docs', app, swaggerDoc, {
     swaggerOptions: { persistAuthorization: true },
   });
 
