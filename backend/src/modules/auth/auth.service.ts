@@ -7,7 +7,7 @@ import * as bcrypt from 'bcrypt';
 import { Player } from '../players/player.entity';
 import { Transaction } from '../transactions/transaction.entity';
 import { TxType } from '../common/enums';
-import { Operator } from '../operator.entity';
+import { Operator } from '../operators/operator.entity';
 
 @Injectable()
 export class AuthService {

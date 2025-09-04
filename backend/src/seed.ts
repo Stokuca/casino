@@ -5,7 +5,7 @@ import * as bcrypt from 'bcrypt';
 
 import { Game } from './modules/games/game.entity';
 import { GameCode } from './modules/common/enums'; // 👈 enum
-import { Operator } from './modules/operator.entity';
+import { Operator } from './modules/operators/operator.entity';
 
 async function main() {
   await ds.initialize();
