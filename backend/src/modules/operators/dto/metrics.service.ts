@@ -1,39 +1,32 @@
-// backend/src/modules/operators/dto/metrics.service.ts
+// backend/src/modules/operators/metrics.service.ts
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  Repository,
-  SelectQueryBuilder,
-} from 'typeorm';
-import { Granularity } from './revenue.dto';
+import { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 import { Transaction } from '../../transactions/transaction.entity';
-import { Game } from '../../games/game.entity';
+import { Granularity } from './revenue.dto';
 
-type ByPeriodRow = { period: Date; totalbet: string; totalpayout: string };
-type GameRow = {
-  gamecode: string | null;
-  gamename: string | null;
-  totalbet: string;
-  totalpayout: string;
+type PeriodRow = { period: Date; totalbet: string; totalpayout: string };
+type GameAggRow = {
+  gameid: string;
+  gamename: string;
+  totalbet?: string;
+  totalpayout?: string;
+  ggr?: string;
+  rounds?: string;
+  avgbet?: string;
+  rtppercent?: string;
 };
-type PopularRow = { gamecode: string | null; gamename: string | null; rounds: string };
-type AvgBetRow = { gamecode: string | null; gamename: string | null; avgbet: string };
-type RtpRow = { gamecode: string | null; gamename: string | null; rtp: string };
 
-function toPgDateTrunc(granularity: Granularity) {
+function dateTrunc(granularity: Granularity) {
   switch (granularity) {
-    case Granularity.DAILY:
-      return 'day';
-    case Granularity.WEEKLY:
-      return 'week';
-    case Granularity.MONTHLY:
-      return 'month';
+    case Granularity.DAILY: return 'day';
+    case Granularity.WEEKLY: return 'week';
+    case Granularity.MONTHLY: return 'month';
   }
 }
 
-/** prostan helper bez generika (nema TS greške) */
-function applyRange(
-  qb: SelectQueryBuilder<any>,
+function applyRange<T extends ObjectLiteral>(
+  qb: SelectQueryBuilder<T>,
   from?: Date,
   to?: Date,
   alias = 't',
@@ -50,20 +43,14 @@ export class MetricsService {
     private readonly txRepo: Repository<Transaction>,
   ) {}
 
-  // ---------------------------------------------------------
-  // 1) Revenue by period (daily/weekly/monthly)
-  // ---------------------------------------------------------
-  async revenueByPeriod(opts: {
-    granularity: Granularity;
-    from?: Date;
-    to?: Date;
-  }) {
+  // ---------------- Revenue by period ----------------
+  async revenueByPeriod(opts: { granularity: Granularity; from?: Date; to?: Date }) {
     const { granularity, from, to } = opts;
-    const pgTrunc = toPgDateTrunc(granularity);
+    const trunc = dateTrunc(granularity);
 
     const qb = this.txRepo
       .createQueryBuilder('t')
-      .select(`DATE_TRUNC('${pgTrunc}', t."createdAt")`, 'period')
+      .select(`DATE_TRUNC('${trunc}', t."createdAt")`, 'period')
       .addSelect(
         `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)`,
         'totalBet',
@@ -71,14 +58,13 @@ export class MetricsService {
       .addSelect(
         `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
         'totalPayout',
-      );
+      )
+      .groupBy('period')
+      .orderBy('period', 'ASC');
 
     applyRange(qb, from, to);
 
-    const rows = await qb
-      .groupBy('period')
-      .orderBy('period', 'ASC')
-      .getRawMany<ByPeriodRow>();
+    const rows = await qb.getRawMany<PeriodRow>();
 
     return rows.map((r) => {
       const totalBet = Number(r.totalbet ?? 0);
@@ -92,16 +78,14 @@ export class MetricsService {
     });
   }
 
-  // ---------------------------------------------------------
-  // 2) Revenue by game (pie chart) – JOIN na Game da vrati code/name
-  // ---------------------------------------------------------
+  // ---------------- Revenue by game (pie) ----------------
   async revenueByGame(opts: { from?: Date; to?: Date }) {
     const { from, to } = opts;
 
     const qb = this.txRepo
       .createQueryBuilder('t')
-      .leftJoin(Game, 'g', 'g.id = t."gameId"')
-      .select('g.code', 'gameCode')
+      .innerJoin('t.game', 'g')
+      .select('g.id', 'gameId')
       .addSelect('g.name', 'gameName')
       .addSelect(
         `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)`,
@@ -110,39 +94,33 @@ export class MetricsService {
       .addSelect(
         `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
         'totalPayout',
-      );
+      )
+      .groupBy('g.id')
+      .addGroupBy('g.name')
+      .orderBy('g.name', 'ASC');
 
     applyRange(qb, from, to);
 
-    const rows = await qb
-      .groupBy('g.code')
-      .addGroupBy('g.name')
-      .orderBy('g.code', 'ASC')
-      .getRawMany<GameRow>();
-
+    const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => {
-      const bet = Number(r.totalbet ?? 0);
-      const payout = Number(r.totalpayout ?? 0);
+      const totalBet = Number(r.totalbet ?? 0);
+      const totalPayout = Number(r.totalpayout ?? 0);
       return {
-        gameCode: r.gamecode,     // npr. 'slots' | 'roulette' | ...
-        gameName: r.gamename,     // 'Slots' | 'Roulette' | ...
-        totalBetCents: bet,
-        totalPayoutCents: payout,
-        ggrCents: bet - payout,
+        gameId: r.gameid,
+        gameName: r.gamename,
+        totalBetCents: totalBet,
+        totalPayoutCents: totalPayout,
+        ggrCents: totalBet - totalPayout,
       };
     });
   }
 
-  // ---------------------------------------------------------
-  // 3) Games metrics
-  // ---------------------------------------------------------
-
-  // 3.1) Top profitable (po GGR desc)
-  async topProfitableGames(limit = 5, from?: Date, to?: Date) {
+  // ---------------- Top profitable games ----------------
+  async topProfitableGames(limit: number, from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
-      .leftJoin(Game, 'g', 'g.id = t."gameId"')
-      .select('g.code', 'gameCode')
+      .innerJoin('t.game', 'g')
+      .select('g.id', 'gameId')
       .addSelect('g.name', 'gameName')
       .addSelect(
         `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)`,
@@ -151,108 +129,115 @@ export class MetricsService {
       .addSelect(
         `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
         'totalPayout',
-      );
-
-    applyRange(qb, from, to);
-
-    const rows = await qb
-      .groupBy('g.code')
+      )
+      .groupBy('g.id')
       .addGroupBy('g.name')
       .orderBy(
-        `(SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END) - SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END))`,
+        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)
+         - SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
         'DESC',
       )
-      .limit(Math.max(1, Number(limit || 5)))
-      .getRawMany<GameRow>();
+      .limit(limit);
 
+    applyRange(qb, from, to);
+
+    const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => {
-      const bet = Number(r.totalbet ?? 0);
-      const payout = Number(r.totalpayout ?? 0);
+      const totalBet = Number(r.totalbet ?? 0);
+      const totalPayout = Number(r.totalpayout ?? 0);
       return {
-        gameCode: r.gamecode,
+        gameId: r.gameid,
         gameName: r.gamename,
-        totalBetCents: bet,
-        totalPayoutCents: payout,
-        ggrCents: bet - payout,
+        totalBetCents: totalBet,
+        totalPayoutCents: totalPayout,
+        ggrCents: totalBet - totalPayout,
       };
     });
   }
 
-  // 3.2) Most popular (broj transakcija/rundi)
-  async mostPopularGames(limit = 5, from?: Date, to?: Date) {
+  // ---------------- Most popular games (#bets) ----------------
+  async mostPopularGames(limit: number, from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
-      .leftJoin(Game, 'g', 'g.id = t."gameId"')
-      .select('g.code', 'gameCode')
+      .innerJoin('t.game', 'g')
+      .select('g.id', 'gameId')
       .addSelect('g.name', 'gameName')
-      .addSelect('COUNT(*)', 'rounds');
+      .addSelect(
+        `COUNT(*) FILTER (WHERE t.type = 'BET')`,
+        'rounds',
+      )
+      .groupBy('g.id')
+      .addGroupBy('g.name')
+      .orderBy(`COUNT(*) FILTER (WHERE t.type = 'BET')`, 'DESC')
+      .limit(limit);
 
     applyRange(qb, from, to);
 
-    const rows = await qb
-      .groupBy('g.code')
-      .addGroupBy('g.name')
-      .orderBy('COUNT(*)', 'DESC')
-      .limit(Math.max(1, Number(limit || 5)))
-      .getRawMany<PopularRow>();
-
+    const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => ({
-      gameCode: r.gamecode,
+      gameId: r.gameid,
       gameName: r.gamename,
       rounds: Number(r.rounds ?? 0),
     }));
   }
 
-  // 3.3) Average bet per game
+  // ---------------- Average bet per game ----------------
   async avgBetPerGame(from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
-      .leftJoin(Game, 'g', 'g.id = t."gameId"')
-      .select('g.code', 'gameCode')
+      .innerJoin('t.game', 'g')
+      .select('g.id', 'gameId')
       .addSelect('g.name', 'gameName')
       .addSelect(
         `AVG(CASE WHEN t.type = 'BET' THEN t."amountCents" END)`,
         'avgBet',
-      );
+      )
+      .groupBy('g.id')
+      .addGroupBy('g.name')
+      .orderBy('g.name', 'ASC');
 
     applyRange(qb, from, to);
 
-    const rows = await qb
-      .groupBy('g.code')
-      .addGroupBy('g.name')
-      .getRawMany<AvgBetRow>();
-
+    const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => ({
-      gameCode: r.gamecode,
+      gameId: r.gameid,
       gameName: r.gamename,
       avgBetCents: Math.round(Number(r.avgbet ?? 0)),
     }));
   }
 
-  // 3.4) RTP per game (actual = PAYOUT / BET * 100)
+  // ---------------- Actual RTP per game ----------------
   async rtpPerGame(from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
-      .leftJoin(Game, 'g', 'g.id = t."gameId"')
-      .select('g.code', 'gameCode')
+      .innerJoin('t.game', 'g')
+      .select('g.id', 'gameId')
       .addSelect('g.name', 'gameName')
       .addSelect(
-        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)
-         / NULLIF(SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END), 0) * 100`,
-        'rtp',
-      );
+        // RTP (%) = totalPayout / totalBet * 100  (zaokruženo na 2 decimale)
+        `CASE
+           WHEN SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END) = 0
+           THEN 0
+           ELSE ROUND(
+             SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)
+             * 100.0
+             / NULLIF(SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END), 0),
+             2
+           )
+         END`,
+        'rtpPercent',
+      )
+      .groupBy('g.id')
+      .addGroupBy('g.name')
+      .orderBy('g.name', 'ASC');
 
     applyRange(qb, from, to);
 
-    const rows = await qb
-      .groupBy('g.code')
-      .addGroupBy('g.name')
-      .getRawMany<RtpRow>();
-
+    const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => ({
-      gameCode: r.gamecode,
+      gameId: r.gameid,
       gameName: r.gamename,
-      rtpPercent: Number(r.rtp ?? 0), // npr. 96.12
+      rtpPercent: Number(r.rtppercent ?? 0),
     }));
   }
 }
