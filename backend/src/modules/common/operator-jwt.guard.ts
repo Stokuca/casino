@@ -1,14 +1,20 @@
 import {
-  Injectable,
   CanActivate,
   ExecutionContext,
+  Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import * as jwt from 'jsonwebtoken'; // KORISTIMO jsonwebtoken direktno
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class OperatorJwtGuard implements CanActivate {
-  canActivate(ctx: ExecutionContext): boolean {
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly cfg: ConfigService,
+  ) {}
+
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest();
     const auth = req.headers['authorization'] as string | undefined;
 
@@ -17,9 +23,10 @@ export class OperatorJwtGuard implements CanActivate {
     }
 
     const token = auth.slice(7);
-    try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET || 'devsecret') as any;
+    const secret = this.cfg.get<string>('JWT_SECRET') || 'devsecret';
 
+    try {
+      const payload: any = await this.jwt.verifyAsync(token, { secret });
       if (payload?.role !== 'OPERATOR') {
         throw new UnauthorizedException('Wrong role');
       }

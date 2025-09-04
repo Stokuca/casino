@@ -1,22 +1,22 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { PlayerJwtGuard } from './player-jwt.guard';
-import { OperatorJwtGuard } from './operator-jwt.guard';
 import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { OperatorJwtGuard } from './operator-jwt.guard';
+import { PlayerJwtGuard } from './player-jwt.guard';
 
 @Module({
   imports: [
-    ConfigModule,
+    ConfigModule, // global je, ali treba za registerAsync
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => ({
-        secret: cfg.get<string>('JWT_SECRET'),     // iz .env
-        signOptions: { expiresIn: '7d' },          // ili koliko želiš
+        secret: cfg.get<string>('JWT_SECRET') || 'devsecret',
+        signOptions: { expiresIn: '7d' },
       }),
     }),
   ],
-  providers: [PlayerJwtGuard, OperatorJwtGuard],
-  exports: [PlayerJwtGuard, OperatorJwtGuard, JwtModule],
+  providers: [OperatorJwtGuard, PlayerJwtGuard],
+  exports: [JwtModule, OperatorJwtGuard, PlayerJwtGuard], // KLJUČNO
 })
 export class CommonModule {}
