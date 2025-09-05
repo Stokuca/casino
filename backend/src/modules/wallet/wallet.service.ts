@@ -3,15 +3,20 @@ import { DataSource } from 'typeorm';
 import { Player } from '../players/player.entity';
 import { Transaction } from '../transactions/transaction.entity';
 import { TxType } from '../common/enums';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly ds: DataSource) {}
+  constructor(
+    private readonly ds: DataSource,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
   async deposit(playerId: string, amountCentsStr: string) {
     const amount = BigInt(amountCentsStr);
 
-    return this.ds.transaction(async (q) => {
+    // izvrši DB promene; vrati šta je potrebno za emit posle commita
+    const result = await this.ds.transaction(async (q) => {
       const prepo = q.getRepository(Player);
       const trepo = q.getRepository(Transaction);
 
@@ -19,7 +24,8 @@ export class WalletService {
       const newBal = BigInt(p.balanceCents) + amount;
 
       await prepo.update(p.id, { balanceCents: newBal.toString() });
-      await trepo.save({
+
+      const tx = await trepo.save({
         playerId,
         type: TxType.DEPOSIT,
         amountCents: amount.toString(),
@@ -27,14 +33,35 @@ export class WalletService {
         meta: { reason: 'manual_deposit' },
       });
 
-      return { balanceCents: newBal.toString(), balance: Number(newBal) / 100 };
+      return {
+        playerId,
+        balanceCents: newBal.toString(),
+        tx, // treba nam za emit
+      };
     });
+
+    // ✅ emit POSLE commita
+    this.realtime.emitPlayerBalance(result.playerId, result.balanceCents);
+    this.realtime.emitPlayerTx(result.playerId, {
+      id: result.tx.id,
+      type: result.tx.type,
+      amountCents: result.tx.amountCents,
+      balanceAfterCents: result.tx.balanceAfterCents,
+      gameId: result.tx.gameId ?? null,
+      createdAt: result.tx.createdAt,
+    });
+    this.realtime.emitMetricsChanged('player');
+
+    return {
+      balanceCents: result.balanceCents,
+      balance: Number(result.balanceCents) / 100,
+    };
   }
 
   async withdraw(playerId: string, amountCentsStr: string) {
     const amount = BigInt(amountCentsStr);
 
-    return this.ds.transaction(async (q) => {
+    const result = await this.ds.transaction(async (q) => {
       const prepo = q.getRepository(Player);
       const trepo = q.getRepository(Transaction);
 
@@ -45,7 +72,8 @@ export class WalletService {
       const newBal = current - amount;
 
       await prepo.update(p.id, { balanceCents: newBal.toString() });
-      await trepo.save({
+
+      const tx = await trepo.save({
         playerId,
         type: TxType.WITHDRAWAL,
         amountCents: amount.toString(),
@@ -53,7 +81,28 @@ export class WalletService {
         meta: { reason: 'manual_withdraw' },
       });
 
-      return { balanceCents: newBal.toString(), balance: Number(newBal) / 100 };
+      return {
+        playerId,
+        balanceCents: newBal.toString(),
+        tx,
+      };
     });
+
+    // ✅ emit POSLE commita
+    this.realtime.emitPlayerBalance(result.playerId, result.balanceCents);
+    this.realtime.emitPlayerTx(result.playerId, {
+      id: result.tx.id,
+      type: result.tx.type,
+      amountCents: result.tx.amountCents,
+      balanceAfterCents: result.tx.balanceAfterCents,
+      gameId: result.tx.gameId ?? null,
+      createdAt: result.tx.createdAt,
+    });
+    this.realtime.emitMetricsChanged('player');
+
+    return {
+      balanceCents: result.balanceCents,
+      balance: Number(result.balanceCents) / 100,
+    };
   }
 }

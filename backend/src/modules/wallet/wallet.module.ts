@@ -5,9 +5,10 @@ import { Transaction } from '../transactions/transaction.entity';
 import { CommonModule } from '../common/common.module';
 import { WalletController } from './wallet.controller';
 import { WalletService } from './wallet.service';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
-  imports: [CommonModule, TypeOrmModule.forFeature([Player, Transaction])],
+  imports: [CommonModule, TypeOrmModule.forFeature([Player, Transaction]), RealtimeModule],
   controllers: [WalletController],
   providers: [WalletService],
 })

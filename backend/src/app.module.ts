@@ -12,6 +12,7 @@ import { WalletModule } from './modules/wallet/wallet.module';
 import { BetsModule } from './modules/bets/bets.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { OperatorsModule } from './modules/operators/operators.module';
+import { RealtimeModule } from './modules/realtime/realtime.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { OperatorsModule } from './modules/operators/operators.module';
     BetsModule,
     TransactionsModule,
     OperatorsModule,
+    RealtimeModule
   ],
   providers: [
     // ⬇️ NEW: globalni guard za rate limiting

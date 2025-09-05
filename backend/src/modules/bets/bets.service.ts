@@ -4,16 +4,21 @@ import { Player } from '../players/player.entity';
 import { Transaction } from '../transactions/transaction.entity';
 import { Game } from '../games/game.entity';
 import { Outcome, TxType } from '../common/enums';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 @Injectable()
 export class BetsService {
-  constructor(private readonly ds: DataSource) {}
+  constructor(
+    private readonly ds: DataSource,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
   async play(playerId: string, gameCode: string, amountStr: string, outcome: Outcome) {
     const betAmount = BigInt(amountStr);
-    const winMultiplier = 2n; // mock isplata na win (možeš kasnije po igri)
+    const winMultiplier = 2n; // mock isplata na win
 
-    return this.ds.transaction(async (q) => {
+    // izvrši sve u transakciji i vrati podatke za emit
+    const result = await this.ds.transaction(async (q) => {
       const prepo = q.getRepository(Player);
       const trepo = q.getRepository(Transaction);
       const grepo = q.getRepository(Game);
@@ -25,10 +30,10 @@ export class BetsService {
       const current = BigInt(p.balanceCents);
       if (current < betAmount) throw new BadRequestException('Insufficient funds');
 
-      // 1) BET (oduzmi)
+      // 1) BET
       const afterBet = current - betAmount;
       await prepo.update(p.id, { balanceCents: afterBet.toString() });
-      await trepo.save({
+      const betTx = await trepo.save({
         playerId,
         gameId: game.id,
         type: TxType.BET,
@@ -37,14 +42,16 @@ export class BetsService {
         meta: { game: game.code },
       });
 
-      // 2) Ako WIN -> PAYOUT (dodaj)
+      // 2) Opcioni PAYOUT
       let finalBal = afterBet;
+      let payoutTx: Transaction | null = null;
+
       if (outcome === Outcome.WIN) {
         const payout = betAmount * winMultiplier;
         finalBal = afterBet + payout;
 
         await prepo.update(p.id, { balanceCents: finalBal.toString() });
-        await trepo.save({
+        payoutTx = await trepo.save({
           playerId,
           gameId: game.id,
           type: TxType.PAYOUT,
@@ -54,7 +61,51 @@ export class BetsService {
         });
       }
 
-      return { balanceCents: finalBal.toString(), balance: Number(finalBal) / 100 };
+      return {
+        playerId,
+        gameId: game.id,
+        balanceCents: finalBal.toString(),
+        betTx,
+        payoutTx,
+      };
     });
+
+    // ✅ emit POSLE commita
+    // Player eventi
+    this.realtime.emitPlayerBalance(result.playerId, result.balanceCents);
+    this.realtime.emitPlayerTx(result.playerId, {
+      id: result.betTx.id,
+      type: result.betTx.type,            // 'BET'
+      amountCents: result.betTx.amountCents,
+      balanceAfterCents: result.betTx.balanceAfterCents,
+      gameId: result.betTx.gameId,
+      createdAt: result.betTx.createdAt,
+    });
+
+    if (result.payoutTx) {
+      this.realtime.emitPlayerBalance(result.playerId, result.balanceCents);
+      this.realtime.emitPlayerTx(result.playerId, {
+        id: result.payoutTx.id,
+        type: result.payoutTx.type,       // 'PAYOUT'
+        amountCents: result.payoutTx.amountCents,
+        balanceAfterCents: result.payoutTx.balanceAfterCents,
+        gameId: result.payoutTx.gameId,
+        createdAt: result.payoutTx.createdAt,
+      });
+    }
+
+    // Operator “tick” za GGR (BET - PAYOUT)
+    const bet = BigInt(result.betTx.amountCents);
+    const payout = BigInt(result.payoutTx?.amountCents ?? '0');
+    const ggrDelta = (bet - payout).toString();
+
+    this.realtime.emitRevenueTick(ggrDelta);
+    this.realtime.emitMetricsChanged('revenue');
+    this.realtime.emitMetricsChanged('game');
+
+    return {
+      balanceCents: result.balanceCents,
+      balance: Number(result.balanceCents) / 100,
+    };
   }
 }

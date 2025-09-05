@@ -6,9 +6,10 @@ import { Game } from '../games/game.entity';
 import { CommonModule } from '../common/common.module';
 import { BetsController } from './bets.controller';
 import { BetsService } from './bets.service';
+import { RealtimeModule } from '../realtime/realtime.module';
 
 @Module({
-  imports: [CommonModule, TypeOrmModule.forFeature([Player, Transaction, Game])],
+  imports: [CommonModule, TypeOrmModule.forFeature([Player, Transaction, Game]), RealtimeModule],
   controllers: [BetsController],
   providers: [BetsService],
 })
