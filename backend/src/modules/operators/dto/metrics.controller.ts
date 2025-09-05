@@ -9,8 +9,13 @@ import {
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 
-// ✅ Swagger dodaci
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
+// ✅ Swagger
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiOkResponse,
+} from '@nestjs/swagger';
 
 import { OperatorJwtGuard } from '../../common/operator-jwt.guard';
 import { MetricsService } from './metrics.service';
@@ -26,7 +31,12 @@ function parseDates(from?: string, to?: string) {
   return { fromDate, toDate };
 }
 
-// ✅ Swagger: tag + named bearer (iz main.ts: 'access-token')
+function ymd(d: Date) {
+  // ISO YYYY-MM-DD (bez vremena) da lepše izgleda u grafovima
+  return new Date(d).toISOString().slice(0, 10);
+}
+
+// ✅ Swagger: tag + named bearer (u main.ts: 'access-token')
 @ApiTags('Metrics')
 @ApiBearerAuth('access-token')
 @UseGuards(OperatorJwtGuard)
@@ -60,11 +70,22 @@ export class MetricsController {
 
     const { fromDate, toDate } = parseDates(dto.from, dto.to);
 
-    return this.metrics.revenueByPeriod({
+    const rows = await this.metrics.revenueByPeriod({
       granularity: dto.granularity ?? Granularity.DAILY,
       from: fromDate,
       to: toDate,
     });
+
+    const series = rows.map((r) => ({
+      bucketStart: ymd(r.period),
+      ggrCents: String(r.ggrCents ?? 0),
+    }));
+
+    const totalGgrCents = String(
+      rows.reduce((acc, r) => acc + Number(r.ggrCents ?? 0), 0),
+    );
+
+    return { totalGgrCents, series };
   }
 
   // ---------------------------------------------------------
@@ -75,9 +96,9 @@ export class MetricsController {
   @ApiOkResponse({
     schema: {
       example: [
-        { gameCode: 'slots', ggrCents: '65000' },
-        { gameCode: 'roulette', ggrCents: '42000' },
-        { gameCode: 'blackjack', ggrCents: '16450' },
+        { gameCode: 'slots', gameName: 'Slots', ggrCents: '65000' },
+        { gameCode: 'roulette', gameName: 'Roulette', ggrCents: '42000' },
+        { gameCode: 'blackjack', gameName: 'Blackjack', ggrCents: '16450' },
       ],
     },
   })
@@ -90,7 +111,16 @@ export class MetricsController {
     if (errors.length) throw new BadRequestException(errors);
 
     const { fromDate, toDate } = parseDates(dto.from, dto.to);
-    return this.metrics.revenueByGame({ from: fromDate, to: toDate });
+    const rows = await this.metrics.revenueByGame({ from: fromDate, to: toDate });
+
+    return rows.map((r) => ({
+      gameCode: r.gameCode,
+      gameName: r.gameName,
+      ggrCents: String(r.ggrCents ?? 0),
+      // opcionalno za detaljnije pie tooltipe:
+      totalBetCents: String(r.totalBetCents ?? 0),
+      totalPayoutCents: String(r.totalPayoutCents ?? 0),
+    }));
   }
 
   // ---------------------------------------------------------
@@ -101,8 +131,8 @@ export class MetricsController {
   @ApiOkResponse({
     schema: {
       example: [
-        { gameCode: 'slots', ggrCents: '65000' },
-        { gameCode: 'roulette', ggrCents: '42000' },
+        { gameCode: 'slots', gameName: 'Slots', ggrCents: '65000' },
+        { gameCode: 'roulette', gameName: 'Roulette', ggrCents: '42000' },
       ],
     },
   })
@@ -116,7 +146,15 @@ export class MetricsController {
 
     const { fromDate, toDate } = parseDates(dto.from, dto.to);
     const limit = dto.limit ?? 5;
-    return this.metrics.topProfitableGames(limit, fromDate, toDate);
+
+    const rows = await this.metrics.topProfitableGames(limit, fromDate, toDate);
+    return rows.map((r) => ({
+      gameCode: r.gameCode,
+      gameName: r.gameName,
+      ggrCents: String(r.ggrCents ?? 0),
+      totalBetCents: String(r.totalBetCents ?? 0),
+      totalPayoutCents: String(r.totalPayoutCents ?? 0),
+    }));
   }
 
   @Get('games/most-popular')
@@ -124,8 +162,8 @@ export class MetricsController {
   @ApiOkResponse({
     schema: {
       example: [
-        { gameCode: 'slots', betsCount: 310 },
-        { gameCode: 'roulette', betsCount: 190 },
+        { gameCode: 'slots', gameName: 'Slots', betsCount: 310 },
+        { gameCode: 'roulette', gameName: 'Roulette', betsCount: 190 },
       ],
     },
   })
@@ -139,7 +177,13 @@ export class MetricsController {
 
     const { fromDate, toDate } = parseDates(dto.from, dto.to);
     const limit = dto.limit ?? 5;
-    return this.metrics.mostPopularGames(limit, fromDate, toDate);
+
+    const rows = await this.metrics.mostPopularGames(limit, fromDate, toDate);
+    return rows.map((r) => ({
+      gameCode: r.gameCode,
+      gameName: r.gameName,
+      betsCount: Number(r.rounds ?? 0),
+    }));
   }
 
   @Get('games/avg-bet')
@@ -147,8 +191,8 @@ export class MetricsController {
   @ApiOkResponse({
     schema: {
       example: [
-        { gameCode: 'slots', avgBetCents: '420' },
-        { gameCode: 'roulette', avgBetCents: '930' },
+        { gameCode: 'slots', gameName: 'Slots', avgBetCents: '420' },
+        { gameCode: 'roulette', gameName: 'Roulette', avgBetCents: '930' },
       ],
     },
   })
@@ -161,7 +205,13 @@ export class MetricsController {
     if (errors.length) throw new BadRequestException(errors);
 
     const { fromDate, toDate } = parseDates(dto.from, dto.to);
-    return this.metrics.avgBetPerGame(fromDate, toDate);
+    const rows = await this.metrics.avgBetPerGame(fromDate, toDate);
+
+    return rows.map((r) => ({
+      gameCode: r.gameCode,
+      gameName: r.gameName,
+      avgBetCents: String(r.avgBetCents ?? 0),
+    }));
   }
 
   @Get('games/rtp')
@@ -169,8 +219,8 @@ export class MetricsController {
   @ApiOkResponse({
     schema: {
       example: [
-        { gameCode: 'slots', theoreticalRtpPct: 96, actualRtpPct: 94.3 },
-        { gameCode: 'roulette', theoreticalRtpPct: 97, actualRtpPct: 96.2 },
+        { gameCode: 'slots', gameName: 'Slots', theoreticalRtpPct: 96, actualRtpPct: 94.3 },
+        { gameCode: 'roulette', gameName: 'Roulette', theoreticalRtpPct: 97.3, actualRtpPct: 96.2 },
       ],
     },
   })
@@ -183,6 +233,16 @@ export class MetricsController {
     if (errors.length) throw new BadRequestException(errors);
 
     const { fromDate, toDate } = parseDates(dto.from, dto.to);
-    return this.metrics.rtpPerGame(fromDate, toDate);
+    const rows = await this.metrics.rtpPerGame(fromDate, toDate);
+
+    return rows.map((r) => ({
+      gameCode: r.gameCode,
+      gameName: r.gameName,
+      theoreticalRtpPct: Number(r.theoreticalRtpPct ?? 0),
+      actualRtpPct: Number(r.actualRtpPct ?? 0),
+      // opcionalno za tooltip/QA:
+      totalBetCents: String(r.totalBetCents ?? 0),
+      totalPayoutCents: String(r.totalPayoutCents ?? 0),
+    }));
   }
 }

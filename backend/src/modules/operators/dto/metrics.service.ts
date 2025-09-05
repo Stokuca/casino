@@ -6,8 +6,10 @@ import { Transaction } from '../../transactions/transaction.entity';
 import { Granularity } from './revenue.dto';
 
 type PeriodRow = { period: Date; totalbet: string; totalpayout: string };
+
 type GameAggRow = {
   gameid: string;
+  gamecode: string;
   gamename: string;
   totalbet?: string;
   totalpayout?: string;
@@ -15,13 +17,17 @@ type GameAggRow = {
   rounds?: string;
   avgbet?: string;
   rtppercent?: string;
+  rtptheoretical?: string;
 };
 
 function dateTrunc(granularity: Granularity) {
   switch (granularity) {
-    case Granularity.DAILY: return 'day';
-    case Granularity.WEEKLY: return 'week';
-    case Granularity.MONTHLY: return 'month';
+    case Granularity.DAILY:
+      return 'day';
+    case Granularity.WEEKLY:
+      return 'week';
+    case Granularity.MONTHLY:
+      return 'month';
   }
 }
 
@@ -52,11 +58,11 @@ export class MetricsService {
       .createQueryBuilder('t')
       .select(`DATE_TRUNC('${trunc}', t."createdAt")`, 'period')
       .addSelect(
-        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)`,
+        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END)`,
         'totalBet',
       )
       .addSelect(
-        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
+        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents"::bigint ELSE 0 END)`,
         'totalPayout',
       )
       .groupBy('period')
@@ -86,16 +92,18 @@ export class MetricsService {
       .createQueryBuilder('t')
       .innerJoin('t.game', 'g')
       .select('g.id', 'gameId')
+      .addSelect('g.code', 'gameCode')
       .addSelect('g.name', 'gameName')
       .addSelect(
-        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)`,
+        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END)`,
         'totalBet',
       )
       .addSelect(
-        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
+        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents"::bigint ELSE 0 END)`,
         'totalPayout',
       )
       .groupBy('g.id')
+      .addGroupBy('g.code')
       .addGroupBy('g.name')
       .orderBy('g.name', 'ASC');
 
@@ -107,6 +115,7 @@ export class MetricsService {
       const totalPayout = Number(r.totalpayout ?? 0);
       return {
         gameId: r.gameid,
+        gameCode: r.gamecode,
         gameName: r.gamename,
         totalBetCents: totalBet,
         totalPayoutCents: totalPayout,
@@ -115,26 +124,31 @@ export class MetricsService {
     });
   }
 
-  // ---------------- Top profitable games ----------------
+  // ---------------- Top profitable games (po GGR) ----------------
   async topProfitableGames(limit: number, from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
       .innerJoin('t.game', 'g')
       .select('g.id', 'gameId')
+      .addSelect('g.code', 'gameCode')
       .addSelect('g.name', 'gameName')
       .addSelect(
-        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)`,
+        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END)`,
         'totalBet',
       )
       .addSelect(
-        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
+        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents"::bigint ELSE 0 END)`,
         'totalPayout',
       )
       .groupBy('g.id')
+      .addGroupBy('g.code')
       .addGroupBy('g.name')
       .orderBy(
-        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END)
-         - SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)`,
+        `
+        SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END)
+        -
+        SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents"::bigint ELSE 0 END)
+        `,
         'DESC',
       )
       .limit(limit);
@@ -147,6 +161,7 @@ export class MetricsService {
       const totalPayout = Number(r.totalpayout ?? 0);
       return {
         gameId: r.gameid,
+        gameCode: r.gamecode,
         gameName: r.gamename,
         totalBetCents: totalBet,
         totalPayoutCents: totalPayout,
@@ -155,18 +170,17 @@ export class MetricsService {
     });
   }
 
-  // ---------------- Most popular games (#bets) ----------------
+  // ---------------- Most popular games (#BET) ----------------
   async mostPopularGames(limit: number, from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
       .innerJoin('t.game', 'g')
       .select('g.id', 'gameId')
+      .addSelect('g.code', 'gameCode')
       .addSelect('g.name', 'gameName')
-      .addSelect(
-        `COUNT(*) FILTER (WHERE t.type = 'BET')`,
-        'rounds',
-      )
+      .addSelect(`COUNT(*) FILTER (WHERE t.type = 'BET')`, 'rounds')
       .groupBy('g.id')
+      .addGroupBy('g.code')
       .addGroupBy('g.name')
       .orderBy(`COUNT(*) FILTER (WHERE t.type = 'BET')`, 'DESC')
       .limit(limit);
@@ -176,6 +190,7 @@ export class MetricsService {
     const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => ({
       gameId: r.gameid,
+      gameCode: r.gamecode,
       gameName: r.gamename,
       rounds: Number(r.rounds ?? 0),
     }));
@@ -187,12 +202,14 @@ export class MetricsService {
       .createQueryBuilder('t')
       .innerJoin('t.game', 'g')
       .select('g.id', 'gameId')
+      .addSelect('g.code', 'gameCode')
       .addSelect('g.name', 'gameName')
       .addSelect(
-        `AVG(CASE WHEN t.type = 'BET' THEN t."amountCents" END)`,
+        `AVG(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint END)`,
         'avgBet',
       )
       .groupBy('g.id')
+      .addGroupBy('g.code')
       .addGroupBy('g.name')
       .orderBy('g.name', 'ASC');
 
@@ -201,34 +218,46 @@ export class MetricsService {
     const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => ({
       gameId: r.gameid,
+      gameCode: r.gamecode,
       gameName: r.gamename,
       avgBetCents: Math.round(Number(r.avgbet ?? 0)),
     }));
   }
 
-  // ---------------- Actual RTP per game ----------------
+  // ---------------- Actual vs Theoretical RTP per game ----------------
   async rtpPerGame(from?: Date, to?: Date) {
     const qb = this.txRepo
       .createQueryBuilder('t')
       .innerJoin('t.game', 'g')
       .select('g.id', 'gameId')
+      .addSelect('g.code', 'gameCode')
       .addSelect('g.name', 'gameName')
+      .addSelect('g.rtpTheoretical', 'rtpTheoretical')
       .addSelect(
-        // RTP (%) = totalPayout / totalBet * 100  (zaokruženo na 2 decimale)
+        `SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END)`,
+        'totalBet',
+      )
+      .addSelect(
+        `SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents"::bigint ELSE 0 END)`,
+        'totalPayout',
+      )
+      .addSelect(
         `CASE
-           WHEN SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END) = 0
+           WHEN SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END) = 0
            THEN 0
            ELSE ROUND(
-             SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents" ELSE 0 END)
+             SUM(CASE WHEN t.type = 'PAYOUT' THEN t."amountCents"::bigint ELSE 0 END)
              * 100.0
-             / NULLIF(SUM(CASE WHEN t.type = 'BET' THEN t."amountCents" ELSE 0 END), 0),
+             / NULLIF(SUM(CASE WHEN t.type = 'BET' THEN t."amountCents"::bigint ELSE 0 END), 0),
              2
            )
          END`,
         'rtpPercent',
       )
       .groupBy('g.id')
+      .addGroupBy('g.code')
       .addGroupBy('g.name')
+      .addGroupBy('g.rtpTheoretical')
       .orderBy('g.name', 'ASC');
 
     applyRange(qb, from, to);
@@ -236,8 +265,12 @@ export class MetricsService {
     const rows = await qb.getRawMany<GameAggRow>();
     return rows.map((r) => ({
       gameId: r.gameid,
+      gameCode: r.gamecode,
       gameName: r.gamename,
-      rtpPercent: Number(r.rtppercent ?? 0),
+      theoreticalRtpPct: Number(r.rtptheoretical ?? 0), // numeric(5,2) → number
+      actualRtpPct: Number(r.rtppercent ?? 0),
+      totalBetCents: Number(r.totalbet ?? 0),
+      totalPayoutCents: Number(r.totalpayout ?? 0),
     }));
   }
 }
